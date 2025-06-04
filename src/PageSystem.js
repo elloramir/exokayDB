@@ -1,0 +1,6 @@
+class PageSystem
+{
+	constructor() {
+		
+	}
+}
