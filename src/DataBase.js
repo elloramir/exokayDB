@@ -7,8 +7,8 @@ class DataBase {
 		this.queuePool = new Map();
 	}
 
-	// Lazily create or return existing Collection instance (no underscore)
-	getOrCreateCollection(collectionName) {
+	getCollection(collectionName) {
+		// Lazily create or return existing Collection instance
 		if (!this.collections.has(collectionName)) {
 			const coll = new Collection(collectionName, this.dir);
 			this.collections.set(collectionName, coll);
@@ -16,15 +16,17 @@ class DataBase {
 		return this.collections.get(collectionName);
 	}
 
-	// Serialize operations per collectionName (no underscore)
 	async toEnqueue(collectionName, operationFn) {
+		// If it is the first operation, we should append
+		// an already resolved promise.
 		if (!this.queuePool.has(collectionName)) {
 			this.queuePool.set(collectionName, Promise.resolve());
 		}
 
+		// Append the operation to the end of the promise-chains
 		const queueHead = this.queuePool.get(collectionName);
 		const queueTail = queueHead.then(async () => {
-			const collection = this.getOrCreateCollection(collectionName);
+			const collection = this.getCollection(collectionName);
 			return operationFn(collection);
 		});
 
@@ -59,7 +61,7 @@ class DataBase {
 		});
 	}
 
-	// Clear (truncate) an entire collection.
+	// Truncate an entire collection.
 	async clear(collectionName) {
 		return this.toEnqueue(collectionName, async (collection) => {
 			return collection.clear();

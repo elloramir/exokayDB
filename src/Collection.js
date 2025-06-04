@@ -38,8 +38,8 @@ class Collection {
 		}
 	}
 
-	// Truncate the file (clear all records)
 	async clear() {
+		// Truncate the file (clear all records)
 		await asyncFS.writeFile(this.filePath, "");
 	}
 }
