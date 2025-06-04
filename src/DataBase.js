@@ -1,96 +1,70 @@
-const fs = require("fs");
-const asyncFS = fs.promises;
+const Collection = require("./Collection");
 
-class DataBase
-{
-	constructor() {
+class DataBase {
+	constructor(dir = ".") {
+		this.dir = dir;
 		this.collections = new Map();
 		this.queuePool = new Map();
 	}
 
-	async populateFromDisk(collectionName)
-	{
-		const content = await asyncFS.readFile(collectionName).catch(err => "[]");
-		const jsonData = JSON.parse(content);
-
-		this.collections.set(collectionName, jsonData);
-		return jsonData;
-	}
-
-	async saveCollection(collectionName, collection=null)
-	{
-		if (!collection) {
-			collection = this.getCollection(collectionName);
+	// Lazily create or return existing Collection instance (no underscore)
+	getOrCreateCollection(collectionName) {
+		if (!this.collections.has(collectionName)) {
+			const coll = new Collection(collectionName, this.dir);
+			this.collections.set(collectionName, coll);
 		}
-
-		await asyncFS.writeFile(collectionName, JSON.stringify(collection));
+		return this.collections.get(collectionName);
 	}
 
-	async getCollection(collectionName) {
-		let collection = this.collections.get(collectionName);
-
-		// Let's create that collection if it is the first time here!
-		if (!collection) {
-			collection = await this.populateFromDisk(collectionName);
-		}
-
-		return collection;
-	}
-
-	async toEnqueue(collectionName, closureOperation)
-	{
-		// For context we should only wait for operations
-		// on our collection page to finish.
+	// Serialize operations per collectionName (no underscore)
+	async toEnqueue(collectionName, operationFn) {
 		if (!this.queuePool.has(collectionName)) {
 			this.queuePool.set(collectionName, Promise.resolve());
 		}
 
-		const collection = await this.getCollection(collectionName);
 		const queueHead = this.queuePool.get(collectionName);
 		const queueTail = queueHead.then(async () => {
-			const res = await closureOperation(collection);
-
-			// Allways propagate the changes into our disk
-			await this.saveCollection(collectionName, collection);
-
-			return res;
+			const collection = this.getOrCreateCollection(collectionName);
+			return operationFn(collection);
 		});
 
 		this.queuePool.set(collectionName, queueTail);
 		return queueTail;
 	}
 
-	// @TODO: Check if jsonData is in fact json
-	async insert(collectionName, jsonData)
-	{
-		await this.toEnqueue(collectionName, (collection) => {
-			collection.push(jsonData);
-			return jsonData;
+	// Insert a JSON object into the given collection
+	// (appends a line in NDJSON).
+	async insert(collectionName, jsonData) {
+		return this.toEnqueue(collectionName, async (collection) => {
+			return collection.append(jsonData);
 		});
 	}
 
-	async clear(collectionName)
-	{
-		await this.toEnqueue(collectionName, (collection) => {
-			// @NOTE: That tricky does not free the memory
-			collection.length = 0;
-		});
-	}
-
-	async find(collectionName, query = { })
-	{
-		return await this.toEnqueue(collectionName, (collection) => {
-			if (Object.keys(query).length === 0)  {
-				return collection;
+	// Find all or matching records in a collection.
+	// Filtering (exact‐match) happens here, in the database layer.
+	async find(collectionName, query = {}) {
+		return this.toEnqueue(collectionName, async (collection) => {
+			const results = [];
+			for await (const obj of collection.readLines()) {
+				if (Object.keys(query).length === 0) {
+					results.push(obj);
+				} else {
+					const matches = Object.entries(query).every(
+						([key, value]) => obj[key] === value
+					);
+					if (matches) results.push(obj);
+				}
 			}
-
-			return collection.filter(entry => 
-				Object.entries(query).every(([key, value]) => {
-					return entry[key] === value;
-				})
-			);
+			return results;
 		});
 	}
-};
+
+	// Clear (truncate) an entire collection.
+	async clear(collectionName) {
+		return this.toEnqueue(collectionName, async (collection) => {
+			return collection.clear();
+		});
+	}
+}
 
 module.exports = DataBase;
